@@ -11,6 +11,7 @@
 #include "mobile_touch_gesture.h"
 #include "mobile_zoom.h"
 #include "mobile_dpad.h"
+#include "mobile_touch_menu.h"
 #include "ra_aspect_viewport.h"
 #include <mmsystem.h>
 
@@ -46,6 +47,7 @@ static MobileZoomState MobileZoom;
 static MobilePinchState MobilePinch;
 static MobileTouchButtonState MobileTouchButtons;
 static MobileDpad MobileDpadState;
+static MobileMenu MobileMenuState;
 static bool MobileTouchCursorHidden = true;
 static bool MobilePointerDragCandidate = false;
 static int MobilePointerDragStartX = 0;
@@ -303,6 +305,9 @@ static void mac_update_modifier_state(void)
 	MacKeyState[VK_MENU] = (mods & KMOD_ALT) ? 1 : 0;
 	MacToggleState[VK_CAPITAL] = (mods & KMOD_CAPS) ? 1 : 0;
 	MacToggleState[VK_NUMLOCK] = (mods & KMOD_NUM) ? 1 : 0;
+#if defined(RA_MOBILE_TOUCH)
+	MobileMenu_ApplyModifiers(&MobileTouchButtons, MacKeyState);
+#endif
 }
 
 static bool mac_state_down(BYTE const *state, int key)
@@ -491,10 +496,14 @@ static void mobile_queue_touch_output(MobileTouchGestureOutput const *out)
 				mac_update_mouse_position(touch_event->x, touch_event->y);
 				break;
 			case MOBILE_TOUCH_LEFT_DOWN:
-				mac_queue_mouse_button_with_cursor(VK_LBUTTON, true, touch_event->x, touch_event->y, touch_event->update_cursor != 0);
+				mac_queue_mouse_button_with_cursor(MobileTouchButtons_GetEffectiveVK(&MobileTouchButtons, VK_LBUTTON), true, touch_event->x, touch_event->y, touch_event->update_cursor != 0);
 				break;
 			case MOBILE_TOUCH_LEFT_UP:
-				mac_queue_mouse_button_with_cursor(VK_LBUTTON, false, touch_event->x, touch_event->y, touch_event->update_cursor != 0);
+				mac_queue_mouse_button_with_cursor(MobileTouchButtons_GetEffectiveVK(&MobileTouchButtons, VK_LBUTTON), false, touch_event->x, touch_event->y, touch_event->update_cursor != 0);
+				/* RMB mode is decided when the click is queued, so it can end now. ATK/MOV are
+				 * read by the game when the queued click is dispatched, so they end in
+				 * MacWin_DispatchMessage instead. */
+				MobileTouchButtons.right_click_mode = 0;
 				break;
 			case MOBILE_TOUCH_RIGHT_DOWN:
 				mac_queue_mouse_button_with_cursor(VK_RBUTTON, true, touch_event->x, touch_event->y, touch_event->update_cursor != 0);
@@ -607,8 +616,102 @@ bool MacSDL_SetScaleQuality(char const *quality)
 
 char const *MacSDL_GetScaleQuality(void)
 {
-	return mac_scale_quality_requested();
+	return MacScaleQuality;
 }
+
+static SDL_ScaleMode mac_scale_mode(void)
+{
+	if (strcmp(MacScaleQuality, "linear") == 0) {
+		return SDL_ScaleModeLinear;
+	}
+	if (strcmp(MacScaleQuality, "best") == 0) {
+		return SDL_ScaleModeBest;
+	}
+	return SDL_ScaleModeNearest;
+}
+
+#if defined(RA_MOBILE_TOUCH)
+static void mobile_menu_layout(void)
+{
+	int w = MacWidth;
+	int h = MacHeight;
+	if (MacWindow) {
+		SDL_GetWindowSize(MacWindow, &w, &h);
+	}
+	MobileMenu_Layout(&MobileMenuState, w, h);
+}
+
+static void mobile_menu_cycle_scale(void)
+{
+	MacSDL_SetScaleQuality(MobileMenu_NextScaleQuality(MacScaleQuality));
+	if (MacTexture) {
+		SDL_SetTextureScaleMode(MacTexture, mac_scale_mode());
+	}
+}
+
+static void mobile_menu_run(int item)
+{
+	switch (MobileMenu_Activate(&MobileTouchButtons, item)) {
+		case MOBILE_MENU_ACTION_KEY_ESC: mac_queue_unmodified_key_pulse(VK_ESCAPE); break;
+		case MOBILE_MENU_ACTION_KEY_SCATTER: mac_queue_unmodified_key_pulse('X'); break;
+		case MOBILE_MENU_ACTION_CYCLE_SCALE: mobile_menu_cycle_scale(); break;
+		default: break;
+	}
+	mac_update_modifier_state();
+}
+
+static void mobile_menu_draw(void)
+{
+	if (InMovie || !MacWindow || !MacRenderer) {
+		return;
+	}
+	int ww = 0, wh = 0, ow = 0, oh = 0;
+	SDL_GetWindowSize(MacWindow, &ww, &wh);
+	SDL_GetRendererOutputSize(MacRenderer, &ow, &oh);
+	if (ww <= 0 || wh <= 0 || ow <= 0 || oh <= 0) {
+		return;
+	}
+	mobile_menu_layout();
+	float sx = (float)ow / (float)ww;
+	float sy = (float)oh / (float)wh;
+	SDL_SetRenderDrawBlendMode(MacRenderer, SDL_BLENDMODE_BLEND);
+	for (int i = 0; i < MOBILE_MENU_COUNT; ++i) {
+		MobileMenuRect r = MobileMenu_ItemRect(&MobileMenuState, i);
+		bool lit = MobileMenu_IsActive(&MobileTouchButtons, i) != 0 || MobileMenuState.pressed_item == i;
+		if (i == MOBILE_MENU_GFX && strcmp(MacScaleQuality, "nearest") != 0) {
+			lit = true;
+		}
+		SDL_Rect box;
+		box.x = (int)((float)r.x * sx);
+		box.y = (int)((float)r.y * sy);
+		box.w = (int)((float)r.w * sx);
+		box.h = (int)((float)r.h * sy);
+		if (lit) SDL_SetRenderDrawColor(MacRenderer, 255, 255, 255, 150);
+		else SDL_SetRenderDrawColor(MacRenderer, 0, 0, 0, 110);
+		SDL_RenderFillRect(MacRenderer, &box);
+
+		int px = box.w / 20;
+		if (px < 1) px = 1;
+		int ox = box.x + (box.w - 17 * px) / 2;
+		int oy = box.y + (box.h - 7 * px) / 2;
+		if (lit) SDL_SetRenderDrawColor(MacRenderer, 0, 0, 0, 230);
+		else SDL_SetRenderDrawColor(MacRenderer, 255, 255, 255, 220);
+		char const *label = MobileMenu_Label(i);
+		for (int c = 0; c < 3; ++c) {
+			for (int row = 0; row < 7; ++row) {
+				unsigned char bits = MobileMenu_GlyphRow(label[c], row);
+				for (int col = 0; col < 5; ++col) {
+					if (bits & (0x10 >> col)) {
+						SDL_Rect dot = { ox + (c * 6 + col) * px, oy + row * px, px, px };
+						SDL_RenderFillRect(MacRenderer, &dot);
+					}
+				}
+			}
+		}
+	}
+	SDL_SetRenderDrawBlendMode(MacRenderer, SDL_BLENDMODE_NONE);
+}
+#endif
 
 bool MacSDL_GetFullscreen(void)
 {
@@ -626,7 +729,13 @@ bool MacSDL_SetMode(int width, int height)
 #if defined(RA_MOBILE_TOUCH)
 		SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengles2");
 #endif
-		SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, mac_scale_quality_requested());
+		{
+			char const *seed = mac_scale_quality_requested();
+			if (seed != MacScaleQuality) {
+				strncpy(MacScaleQuality, seed, sizeof(MacScaleQuality) - 1);
+			}
+		}
+		SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, MacScaleQuality);
 		SDL_SetHint(SDL_HINT_RENDER_LOGICAL_SIZE_MODE, "letterbox");
 #if defined(RA_IOS) || defined(RA_ANDROID)
 		SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
@@ -652,6 +761,7 @@ bool MacSDL_SetMode(int width, int height)
 		MobilePinch_Init(&MobilePinch);
 		MobileTouchButtons_Init(&MobileTouchButtons);
 		MobileDpad_Init(&MobileDpadState);
+		MobileMenu_Init(&MobileMenuState);
 #endif
 	}
 
@@ -787,6 +897,12 @@ static void mac_sdl_pump_events(bool allow_idle_delay)
 					float pad_x = 0.0f;
 					float pad_y = 0.0f;
 					mobile_window_point(event.tfinger.x, event.tfinger.y, &pad_x, &pad_y);
+					mobile_menu_layout();
+					int menu_item = MobileMenu_Down(&MobileMenuState, (long long)event.tfinger.fingerId, pad_x, pad_y);
+					if (menu_item >= 0) {
+						mobile_menu_run(menu_item);
+						break;
+					}
 					mobile_dpad_layout();
 					if (MobileDpad_Down(&MobileDpadState, (long long)event.tfinger.fingerId, pad_x, pad_y, mac_now_ms())) {
 						break;
@@ -811,6 +927,9 @@ static void mac_sdl_pump_events(bool allow_idle_delay)
 			case SDL_FINGERMOTION: {
 				int x = 0;
 				int y = 0;
+				if (MobileMenu_Owns(&MobileMenuState, (long long)event.tfinger.fingerId)) {
+					break;
+				}
 				if (MobileDpad_Owns(&MobileDpadState, (long long)event.tfinger.fingerId)) {
 					float pad_x = 0.0f;
 					float pad_y = 0.0f;
@@ -846,6 +965,10 @@ static void mac_sdl_pump_events(bool allow_idle_delay)
 			case SDL_FINGERUP: {
 				int x = 0;
 				int y = 0;
+				if (MobileMenu_Owns(&MobileMenuState, (long long)event.tfinger.fingerId)) {
+					MobileMenu_Up(&MobileMenuState, (long long)event.tfinger.fingerId);
+					break;
+				}
 				if (MobileDpad_Owns(&MobileDpadState, (long long)event.tfinger.fingerId)) {
 					MobileDpad_Up(&MobileDpadState, (long long)event.tfinger.fingerId);
 					break;
@@ -1014,6 +1137,7 @@ void MacSDL_Present8(unsigned char const *pixels, int width, int height, int pit
 		}
 	}
 
+	SDL_SetTextureScaleMode(MacTexture, mac_scale_mode());
 	SDL_UpdateTexture(MacTexture, 0, MacFrame, width * (int)sizeof(uint32_t));
 	RAAspectViewport viewport = mac_renderer_viewport(width, height);
 	SDL_Rect destination;
@@ -1072,6 +1196,9 @@ void MacSDL_Present8(unsigned char const *pixels, int width, int height, int pit
 		}
 	}
 #endif
+#if defined(RA_MOBILE_TOUCH)
+	mobile_menu_draw();
+#endif
 	SDL_RenderPresent(MacRenderer);
 	MacPresenting = false;
 }
@@ -1105,6 +1232,14 @@ extern "C" LRESULT MacWin_DispatchMessage(MSG const *msg)
 	MacUnmodifiedKeyDispatch = MobileKeyMessage_IsUnmodified(msg->message, msg->lParam) != 0;
 	LRESULT result = Windows_Procedure(msg->hwnd, msg->message, msg->wParam, msg->lParam);
 	MacUnmodifiedKeyDispatch = previous;
+#if defined(RA_MOBILE_TOUCH)
+	if ((msg->message == WM_LBUTTONUP || msg->message == WM_RBUTTONUP) &&
+			(MobileTouchButtons.force_attack_active || MobileTouchButtons.force_move_active)) {
+		MobileTouchButtons.force_attack_active = 0;
+		MobileTouchButtons.force_move_active = 0;
+		mac_update_modifier_state();
+	}
+#endif
 	return result;
 }
 
