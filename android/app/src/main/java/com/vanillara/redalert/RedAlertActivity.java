@@ -1,16 +1,24 @@
 package com.vanillara.redalert;
 
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.Intent;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
@@ -19,6 +27,8 @@ import org.libsdl.app.SDLActivity;
 /**
  * Hosts the native Red Alert engine. The game data has already been imported
  * into app-private storage by SetupActivity.
+ *
+ * Added: on-screen ESC / ENTER / SPACE buttons (bottom-left overlay).
  */
 public class RedAlertActivity extends SDLActivity {
 
@@ -43,6 +53,7 @@ public class RedAlertActivity extends SDLActivity {
         super.onCreate(savedInstanceState);
         registerBackCallback();
         configureImmersiveMode();
+        addKeyButtons();
     }
 
     @Override
@@ -58,6 +69,85 @@ public class RedAlertActivity extends SDLActivity {
             configureImmersiveMode();
         }
     }
+
+    // ---- on-screen keys -------------------------------------------------
+
+    private void addKeyButtons() {
+        float d = getResources().getDisplayMetrics().density;
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setFocusable(false);
+        row.setFocusableInTouchMode(false);
+
+        row.addView(makeKeyButton("ESC", KeyEvent.KEYCODE_ESCAPE, d));
+        row.addView(makeKeyButton("ENTER", KeyEvent.KEYCODE_ENTER, d));
+        row.addView(makeKeyButton("SPACE", KeyEvent.KEYCODE_SPACE, d));
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM | Gravity.START);
+        lp.setMargins((int) (8 * d), 0, 0, (int) (8 * d));
+        addContentView(row, lp);
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private Button makeKeyButton(String label, final int keyCode, float d) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(12);
+        b.setAllCaps(false);
+        b.setFocusable(false);
+        b.setFocusableInTouchMode(false);
+        b.setAlpha(0.6f);
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor("#AA222222"));
+        bg.setCornerRadius(8 * d);
+        bg.setStroke((int) Math.max(1, d), Color.WHITE);
+        b.setBackground(bg);
+
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setPadding((int) (12 * d), (int) (8 * d), (int) (12 * d), (int) (8 * d));
+
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT);
+        p.setMargins(0, 0, (int) (6 * d), 0);
+        b.setLayoutParams(p);
+
+        b.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        v.setAlpha(1.0f);
+                        sendKey(KeyEvent.ACTION_DOWN, keyCode);
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        v.setAlpha(0.6f);
+                        sendKey(KeyEvent.ACTION_UP, keyCode);
+                        return true;
+                    default:
+                        return true;
+                }
+            }
+        });
+        return b;
+    }
+
+    private void sendKey(int action, int keyCode) {
+        long now = SystemClock.uptimeMillis();
+        dispatchKeyEvent(new KeyEvent(now, now, action, keyCode, 0));
+    }
+
+    // ---- original code --------------------------------------------------
 
     private void registerBackCallback() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
