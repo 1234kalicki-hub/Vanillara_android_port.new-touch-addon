@@ -28,7 +28,7 @@ import org.libsdl.app.SDLActivity;
  * Hosts the native Red Alert engine. The game data has already been imported
  * into app-private storage by SetupActivity.
  *
- * Added: on-screen ESC / ENTER / SPACE buttons (bottom-left overlay).
+ * Added: on-screen ENTER / SPACE buttons (bottom-right overlay).
  */
 public class RedAlertActivity extends SDLActivity {
 
@@ -80,15 +80,14 @@ public class RedAlertActivity extends SDLActivity {
         row.setFocusable(false);
         row.setFocusableInTouchMode(false);
 
-        row.addView(makeKeyButton("ESC", KeyEvent.KEYCODE_ESCAPE, d));
         row.addView(makeKeyButton("ENTER", KeyEvent.KEYCODE_ENTER, d));
         row.addView(makeKeyButton("SPACE", KeyEvent.KEYCODE_SPACE, d));
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM | Gravity.START);
-        lp.setMargins((int) (8 * d), 0, 0, (int) (8 * d));
+            Gravity.BOTTOM | Gravity.END);
+        lp.setMargins(0, 0, (int) (8 * d), (int) (8 * d));
         addContentView(row, lp);
     }
 
@@ -230,4 +229,4 @@ public class RedAlertActivity extends SDLActivity {
         dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE, 0));
         dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE, 0));
     }
-}
+        }
